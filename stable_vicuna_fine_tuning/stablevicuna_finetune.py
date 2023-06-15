@@ -6,15 +6,18 @@ import torch.nn as nn
 import bitsandbytes as bnb
 from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM
 
-MODEL_PATH="/media/onetbssd/llama/StableVicuna/7B"
+SIZE="13B"
+MODEL_PATH="/media/onetbssd/llama/StableVicuna/"+SIZE
+MODEL_FINE_TUNED_PATH="/media/onetbssd/llama/StableVicuna/"+SIZE+"trained"
 tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)    
 model = AutoModelForCausalLM.from_pretrained(MODEL_PATH,      
     load_in_4bit=True, 
+    #load_in_8bit=True, 
     device_map='auto')
 if tokenizer.pad_token is None:
     tokenizer.add_special_tokens({'pad_token': '[PAD]'})
     model.resize_token_embeddings(len(tokenizer))
-
+print("MODEL LOADED!")
 
 class CastOutputToFloat(nn.Sequential):
   def forward(self, x): return super().forward(x).to(torch.float32)
@@ -25,6 +28,7 @@ for param in model.parameters():
   if param.ndim == 1:
     # cast the small parameters (e.g. layernorm) to fp32 for stability
     param.data = param.data.to(torch.float16)
+print("WEIGHTS FROZEN!")
 
 model.gradient_checkpointing_enable()  # reduce number of stored activations
 model.enable_input_require_grads()
@@ -39,6 +43,7 @@ config = LoraConfig( r=16, #attention heads
     task_type="CAUSAL_LM" # set this for CAUSAL LANGUAGE MODELS (like Bloom, LLaMA) or SEQ TO SEQ (like FLAN, T5)
 )
 model = get_peft_model(model, config)
+print("LORA CONFIG CREATED!")
 
 # Check how many parameters can be trained
 def get_trainable_params(model):
@@ -81,7 +86,7 @@ trainer = transformers.Trainer(
         per_device_train_batch_size=2, 
         gradient_accumulation_steps=6,
         warmup_steps=100, 
-        max_steps=100, 
+        max_steps=2000, 
         learning_rate=2e-4, 
         fp16=True,
         logging_steps=1, 
@@ -90,8 +95,9 @@ trainer = transformers.Trainer(
     data_collator=transformers.DataCollatorForLanguageModeling(tokenizer, mlm=False)
 )
 
+print("TRAINER CREATED!")
+
 model.config.use_cache = False  # silence the warnings. Please re-enable for inference!
 trainer.train()
-model.save_pretrained("/media/onetbssd/llama/StableVicuna/7Btrained")
-
-
+print("TRAINED!")
+model.save_pretrained(MODEL_FINE_TUNED_PATH)

@@ -1,0 +1,151 @@
+# env vars
+export HF_DATASETS_CACHE=/media/onetbssd/huggingface_cache
+export LD_LIBRARY_PATH=/usr/local/cuda-11.7/lib64/
+export PATH=/usr/local/cuda-11.7/bin:$PATH
+export TRANSFORMERS_CACHE=/media/onetbssd/huggingface_cache
+
+# transformers library latest version
+pip install git+https://github.com/huggingface/transformers
+
+# Download LLAMA
+https://github.com/facebookresearch/llama/issues/149
+
+# Convert origina LLAMA weights to hugging face weights
+python ~/Projects/huggingface/transformers/src/transformers/models/llama/convert_llama_weights_to_hf.py --input_dir /media/onetbssd/llama/LLaMA --model_size 7B --output_dir  /media/onetbssd/llama/huggingface
+
+python ~/Projects/huggingface/transformers/src/transformers/models/llama/convert_llama_weights_to_hf.py --input_dir /media/onetbssd/llama/LLaMA --model_size 13B --output_dir  /media/onetbssd/llama/huggingface
+Ref: https://huggingface.co/docs/transformers/model_doc/llama
+
+# Create Stable Vicuna weights by applying delta on top of facebook's LLAMA
+python -m fastchat.model.apply_delta \
+    --base-model-path /media/onetbssd/llama/huggingface/7B \
+    --target-model-path /media/onetbssd/llama/StableVicuna/7B \
+    --delta-path lmsys/vicuna-7b-delta-v1.1
+
+python -m fastchat.model.apply_delta \
+    --base-model-path /media/onetbssd/llama/huggingface/13B \
+    --target-model-path /media/onetbssd/llama/StableVicuna/13B \
+    --delta-path lmsys/vicuna-13b-delta-v1.1
+
+Ref: https://github.com/lm-sys/FastChat#vicuna-weights
+
+# CLI inference:
+python3 -m fastchat.serve.cli --model-path /media/onetbssd/llama/StableVicuna/7B --load-8bit
+
+python3 -m fastchat.serve.cli --model-path /media/onetbssd/llama/StableVicuna/13B --load-8bit
+
+# Fine Tune: 
+torchrun fastchat/train/train_mem.py \
+    --model_name_or_path /media/onetbssd/llama/huggingface/13B  \
+    --data_path /media/onetbssd/llama/shareGPT/ShareGPT_V3_unfiltered_cleaned_split_no_imsorry.json \
+    --output_dir /media/onetbssd/llama/fine_tuned_vicuna_13B \
+    --num_train_epochs 3 \
+    --per_device_train_batch_size 2 \
+    --per_device_eval_batch_size 2 \
+    --gradient_accumulation_steps 16 \
+    --evaluation_strategy "no" \
+    --save_strategy "steps" \
+    --save_steps 1200 \
+    --save_total_limit 10 \
+    --learning_rate 2e-5 \
+    --weight_decay 0. \
+    --warmup_ratio 0.03 \
+    --lr_scheduler_type "cosine" \
+    --logging_steps 1 \
+    --fsdp "full_shard auto_wrap" \
+    --fsdp_transformer_layer_cls_to_wrap 'LlamaDecoderLayer' \
+    --model_max_length 2048 \
+    --gradient_checkpointing True \
+    --lazy_preprocess True \
+    --bf16 True \
+    --tf32 True \
+
+torchrun fastchat/train/train_lora.py \
+    --model_name_or_path /media/onetbssd/llama/huggingface/7B  \
+    --data_path /media/onetbssd/llama/shareGPT/ShareGPT_V3_unfiltered_cleaned_split_no_imsorry.json \
+    --output_dir /media/onetbssd/llama/fine_tuned_vicuna_7B \
+    --num_train_epochs 3 \
+    --per_device_train_batch_size 2 \
+    --per_device_eval_batch_size 2 \
+    --gradient_accumulation_steps 16 \
+    --evaluation_strategy "no" \
+    --save_strategy "steps" \
+    --save_steps 1200 \
+    --save_total_limit 10 \
+    --learning_rate 2e-5 \
+    --weight_decay 0. \
+    --warmup_ratio 0.03 \
+    --lr_scheduler_type "cosine" \
+    --logging_steps 1 \
+    --fsdp "full_shard auto_wrap" \
+    --fsdp_transformer_layer_cls_to_wrap 'LlamaDecoderLayer' \
+    --model_max_length 2048 \
+    --gradient_checkpointing True \
+    --lazy_preprocess True \
+    --fp16 True \
+----
+Fine tune:
+https://github.com/git-cloner/llama-lora-fine-tuning#341-fine-tuning-command
+
+python fastchat/data/merge.py --in /media/onetbssd/llama/shareGPT/sg_90k_part1.json /media/onetbssd/llama/shareGPT/sg_90k_part2.json --out /media/onetbssd/llama/shareGPT/sg_90k.json
+
+python fastchat/data/clean_sharegpt.py --in /media/onetbssd/llama/shareGPT/sg_90k.json --out /media/onetbssd/llama/shareGPT/sharegpt_clean.json
+
+python fastchat/data/split_long_conversation.py --in /media/onetbssd/llama/shareGPT/sharegpt_clean.json --out /media/onetbssd/llama/shareGPT/sharegpt_clean_split.json --model-name /media/onetbssd/llama/huggingface/7B
+
+# Disable wandb 
+wandb disabled 
+# In order to prevent the SSH terminal from disconnecting and stopping the training, the training can run in the background (remove the # in three places to run in the background)
+# If you have multiple GPUs,using --num_gpus parameter
+CUDA_VISIBLE_DEVICES=0 \ #nohup \ 
+deepspeed fastchat/train/train_lora.py \
+  --deepspeed ./deepspeed-config.json \
+  --lora_r 8 \
+  --lora_alpha 16 \
+  --lora_dropout 0.05 \
+  --model_name_or_path /media/onetbssd/llama/huggingface/7B \
+  --data_path /media/onetbssd/llama/shareGPT/sharegpt_clean_split.json \
+  --fp16 True \
+  --output_dir /media/onetbssd/llama/llama-lora-fine-tuning\7Bfinetune \
+  --num_train_epochs 1 \
+  --per_device_train_batch_size 14 \
+  --per_device_eval_batch_size 14 \
+  --gradient_accumulation_steps 1 \
+  --evaluation_strategy "no" \
+  --save_strategy "steps" \
+  --save_steps 2400 \
+  --save_total_limit 5 \
+  --learning_rate 2e-5 \
+  --weight_decay 0. \
+  --warmup_ratio 0.03 \
+  --lr_scheduler_type "cosine" \
+  --logging_steps 1 \
+  --model_max_length 512 \
+  --gradient_checkpointing True #>> lora.log 2>&1 &
+
+Evaluate:
+----
+CUDA_VISIBLE_DEVICES=0  python generate.py  --base_model /media/onetbssd/llama/huggingface/7B --lora_weights  /media/onetbssd/llama/llama-lora-fine-tuning\7Bfinetune
+
+----
+Given SQL tables are
+CREATE TABLE CITY_CTR_SLS(CUST_CITY_ID INT, CALL_CTR_ID INT, TOT_DOLLAR_SALES DOUBLE, TOT_UNIT_SALES DOUBLE, TOT_COST DOUBLE, GROSS_DOLLAR_SALES DOUBLE);
+CREATE TABLE LU_CUST_CITY(CUST_CITY_ID INT, CUST_CITY_NAME VARCHAR, CUST_STATE_ID INT);
+CREATE TABLE LU_CUST_REGION(CUST_REGION_ID INT, CUST_REGION_NAME VARCHAR, CUST_COUNTRY_ID INT);
+CREATE TABLE LU_CUST_COUNTRY(CUST_COUNTRY_ID INT, CUST_COUNTRY_NAME VARCHAR);
+CREATE TABLE LU_CUST_STATE(CUST_STATE_ID INT, CUST_STATE_NAME VARCHAR, CUST_REGION_ID INT);
+which 5 cities have the highest cost in USA? Please return MySQL SQL.
+
+-----
+Given SQL tables: CREATE TABLE CITY_CTR_SLS(CUST_CITY_ID INT, CALL_CTR_ID INT, TOT_DOLLAR_SALES DOUBLE, TOT_UNIT_SALES DOUBLE, TOT_COST DOUBLE, GROSS_DOLLAR_SALES DOUBLE); CREATE TABLE LU_CUST_CITY(CUST_CITY_ID INT, CUST_CITY_NAME VARCHAR); which 5 cities have the highest cost? Please return SQLServer SQL, please surround the words in SQL with double quotes
+
+Given SQL tables: CREATE TABLE CITY_CTR_SLS(CUST_CITY_ID INT, CALL_CTR_ID INT, TOT_DOLLAR_SALES DOUBLE, TOT_UNIT_SALES DOUBLE, TOT_COST DOUBLE, GROSS_DOLLAR_SALES DOUBLE); CREATE TABLE LU_CUST_CITY(CUST_CITY_ID INT, CUST_CITY_NAME VARCHAR); Produce SQL code that outputs which 5 cities have the highest cost? Please return SQLServer SQL, please use quotation of column names
+OUTPUT:
+Assistant: Sure, here's the revised SQL Server query with double quotes surrounding the column names:
+```sql
+SELECT "CITY_CTR_SLS"."CUST_CITY_ID", "CITY_CTR_SLS"."TOT_COST
+FROM "CITY_CTR_SLS"
+JOIN "LU_CUST_CITY" ON "CITY_CTR_SLS"."CUST_CITY_ID" = "LU_CUST_CITY"."CUST_CITY_ID"
+WHERE "CITY_CTR_SLS"."TOT_CO
+```
+----
