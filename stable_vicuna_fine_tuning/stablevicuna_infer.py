@@ -12,6 +12,7 @@ model = LlamaForCausalLM.from_pretrained(MODEL_PATH,
 	load_in_4bit=True, 
     device_map='auto')
 
+#prompt = "Hey, are you conscious? Can you talk to me?"
 prompt = "Hey, are you conscious? Can you talk to me?"
 inputs = tokenizer(prompt, return_tensors="pt")
 inputs.to("cuda")
